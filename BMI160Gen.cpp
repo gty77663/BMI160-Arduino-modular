@@ -9,7 +9,7 @@ bool BMI160GenClass::begin(const int spi_cs_pin, const int intr_pin)
     return begin(SPI_MODE, spi_cs_pin, intr_pin);
 }
 
-bool BMI160GenClass::begin(Mode mode, const int arg1, const int arg2)
+bool BMI160GenClass::begin(Mode mode, const int arg1, const int arg2, SoftWire *i2c_interface)
 {
     this->mode = mode;
     switch (this->mode) {
@@ -17,6 +17,12 @@ bool BMI160GenClass::begin(Mode mode, const int arg1, const int arg2)
         return false;
     case I2C_MODE:
         i2c_addr = arg1;
+        if (i2c_interface != NULL) {
+            this->i2c_interface = i2c_interface;
+            this->use_softwire = true;
+        } else {
+            this->use_softwire = false;
+        }
         break;
     case SPI_MODE:
         spi_ss = arg1;
@@ -64,6 +70,9 @@ int BMI160GenClass::ss_xfer(uint8_t *buf, unsigned tx_cnt, unsigned rx_cnt)
 {
     switch (this->mode) {
     case I2C_MODE:
+        if (this->use_softwire)
+            return i2c_soft_xfer(buf, tx_cnt, rx_cnt);
+          
         return i2c_xfer(buf, tx_cnt, rx_cnt);
     case SPI_MODE:
         if (rx_cnt) /* For read transfers, assume 1st byte contains register address */
@@ -80,10 +89,12 @@ void BMI160GenClass::i2c_init()
   Serial.println("BMI160GenClass::i2c_init()...");
 #endif // DEBUG
 
-  Wire.begin();
-  Wire.beginTransmission(i2c_addr);
-  if( Wire.endTransmission() != 0 )
-      Serial.println("BMI160GenClass::i2c_init(): I2C failed.");
+  if (!this->use_softwire) {
+    Wire.begin();
+    Wire.beginTransmission(i2c_addr);
+    if( Wire.endTransmission() != 0 )
+        Serial.println("BMI160GenClass::i2c_init(): I2C failed.");
+  }
 
 #ifdef DEBUG
   int id = getDeviceID();
@@ -96,7 +107,7 @@ void BMI160GenClass::i2c_init()
 int BMI160GenClass::i2c_xfer(uint8_t *buf, unsigned tx_cnt, unsigned rx_cnt)
 {
   uint8_t *p;
-
+  
 #ifdef DEBUG
   Serial.print("i2c_xfer(offs=0x");
   Serial.print(*buf, HEX);
@@ -127,6 +138,51 @@ int BMI160GenClass::i2c_xfer(uint8_t *buf, unsigned tx_cnt, unsigned rx_cnt)
       Serial.print(t, HEX);
 #else
       *p++ = Wire.read();;
+#endif // DEBUG
+    }
+  }
+
+#ifdef DEBUG
+  Serial.println("");
+#endif // DEBUG
+
+  return (0);
+}
+
+int BMI160GenClass::i2c_soft_xfer(uint8_t *buf, unsigned tx_cnt, unsigned rx_cnt)
+{
+  uint8_t *p;
+  
+#ifdef DEBUG
+  Serial.print("i2c_xfer(offs=0x");
+  Serial.print(*buf, HEX);
+  Serial.print(", tx=");
+  Serial.print(tx_cnt);
+  Serial.print(", rx=");
+  Serial.print(rx_cnt);
+  Serial.print("):");
+#endif // DEBUG
+
+  this->i2c_interface->beginTransmission(i2c_addr);
+  p = buf;
+  while (0 < tx_cnt) {
+    tx_cnt--;
+    this->i2c_interface->write(*p++);
+  }
+  if( this->i2c_interface->endTransmission() != 0 ) {
+      Serial.println("Wire.endTransmission() failed.");
+  }
+  if (0 < rx_cnt) {
+    this->i2c_interface->requestFrom(i2c_addr, rx_cnt);
+    p = buf;
+    while ( this->i2c_interface->available() && 0 < rx_cnt) {
+      rx_cnt--;
+#ifdef DEBUG
+      int t = *p++ = this->i2c_interface->read();
+      Serial.print(" ");
+      Serial.print(t, HEX);
+#else
+      *p++ = this->i2c_interface->read();;
 #endif // DEBUG
     }
   }
